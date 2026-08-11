@@ -51,7 +51,10 @@ const liked = ref(false)
 const progress = ref(32)
 const query = ref('')
 const visibleTracks = computed(() => tracks.value.filter(t => `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(query.value.toLowerCase())))
-function playTrack(index) { current.value = index; playing.value = true }
+function playTrack(track) {
+  current.value = tracks.value.indexOf(track)
+  playing.value = true
+}
 </script>
 
 <template>
@@ -94,8 +97,8 @@ function playTrack(index) { current.value = index; playing.value = true }
       <section class="section recently" id="library">
         <div class="section-head"><div><h2>Recently played</h2><p>Pick up where you left off</p></div><div class="view-buttons"><button><Icon name="list" /></button><a href="#">See all <Icon name="chevron" /></a></div></div>
         <div class="track-header"><span>#</span><span>Title</span><span>Album</span><span>Source</span><span><Icon name="clock" /></span><span></span></div>
-        <div class="track-row" v-for="(track, i) in visibleTracks" :key="track.title" :class="{ selected: current === i }" @dblclick="playTrack(i)">
-          <span class="track-index">{{ i + 1 }}</span><div class="track-title"><img :src="track.art" :alt=""><div><strong>{{track.title}}</strong><small>{{track.artist}}</small></div></div><span class="album">{{track.album}}</span><span class="source" :class="track.source"><Icon :name="track.source" /></span><span class="time">{{track.time}}</span><button class="row-more"><Icon name="dots" /></button>
+        <div class="track-row" v-for="(track, i) in visibleTracks" :key="track.title" :class="{ selected: tracks[current] === track }" @dblclick="playTrack(track)">
+          <span class="track-index">{{ i + 1 }}</span><div class="track-title"><img :src="track.art" :alt="`${track.album} cover`"><div><strong>{{track.title}}</strong><small>{{track.artist}}</small></div></div><span class="album">{{track.album}}</span><span class="source" :class="track.source"><Icon :name="track.source" /></span><span class="time">{{track.time}}</span><button class="row-more" :aria-label="`More options for ${track.title}`"><Icon name="dots" /></button>
         </div>
         <p v-if="!visibleTracks.length" class="empty">No songs found. Try another search.</p>
       </section>
