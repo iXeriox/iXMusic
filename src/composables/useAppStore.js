@@ -40,6 +40,26 @@ export function useAppStore() {
     state.value.session = account.id
   }
 
+  function loginWithDiscord(profile) {
+    let account = state.value.users.find(item => item.discordId === profile.id)
+    if (!account) {
+      account = {
+        id: `discord:${profile.id}`,
+        discordId: profile.id,
+        name: profile.global_name || profile.username,
+        email: profile.email || `${profile.username}@discord`,
+        avatar: profile.avatar
+          ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png?size=128`
+          : null
+      }
+      state.value.users.push(account)
+    } else {
+      account.name = profile.global_name || profile.username
+      account.email = profile.email || account.email
+    }
+    state.value.session = account.id
+  }
+
   function logout() { state.value.session = null }
   function setRegion(region) { state.value.region = region }
 
@@ -73,5 +93,5 @@ export function useAppStore() {
     state.value.recent = [trackId, ...state.value.recent.filter(id => id !== trackId)].slice(0, 20)
   }
 
-  return { state, user, register, login, logout, setRegion, createPlaylist, deletePlaylist, togglePlaylistTrack, toggleLike, markPlayed }
+  return { state, user, register, login, loginWithDiscord, logout, setRegion, createPlaylist, deletePlaylist, togglePlaylistTrack, toggleLike, markPlayed }
 }
