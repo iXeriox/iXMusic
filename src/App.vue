@@ -14,7 +14,7 @@ const tracks = [
 ]
 
 const regions = { US: 'United States', GB: 'United Kingdom', CA: 'Canada', AU: 'Australia', DE: 'Germany', FR: 'France', NG: 'Nigeria', ZA: 'South Africa' }
-const { state, user, loginWithDiscord, logout, setRegion, createPlaylist, deletePlaylist, togglePlaylistTrack, toggleLike, markPlayed } = useAppStore()
+const { state, user, initialize, completeDiscordLogin, logout, setRegion, createPlaylist, deletePlaylist, togglePlaylistTrack, toggleLike, markPlayed } = useAppStore()
 const authError = ref('')
 const activeView = ref('home')
 const selectedPlaylist = ref(null)
@@ -44,9 +44,9 @@ const regionalTracks = computed(() => {
 })
 const playlist = computed(() => state.value.playlists.find(item => item.id === selectedPlaylist.value))
 const libraryTracks = computed(() => {
-  if (activeView.value === 'liked') return tracks.filter(track => state.value.liked.includes(track.id))
-  if (activeView.value === 'recent') return state.value.recent.map(id => tracks.find(track => track.id === id)).filter(Boolean)
-  if (playlist.value) return playlist.value.trackIds.map(id => tracks.find(track => track.id === id)).filter(Boolean)
+  if (activeView.value === 'liked') return tracks.filter(track => state.value.liked.includes(track.video))
+  if (activeView.value === 'recent') return state.value.recent.map(item => tracks.find(track => track.video === (item.video || item.youtube_video_id))).filter(Boolean)
+  if (playlist.value) return playlist.value.trackIds.map(id => tracks.find(track => track.video === id)).filter(Boolean)
   return regionalTracks.value
 })
 const results = computed(() => {
@@ -58,25 +58,23 @@ const results = computed(() => {
 function loginWithDiscordRedirect() {
   const clientId = import.meta.env.VITE_DISCORD_CLIENT_ID
   if (!clientId) return (authError.value = 'Add VITE_DISCORD_CLIENT_ID to your .env file to enable Discord login.')
-  const redirect = `${location.origin}${location.pathname}`
+  const redirect = import.meta.env.VITE_DISCORD_REDIRECT_URI || `${location.origin}${location.pathname}`
   const stateToken = crypto.randomUUID()
   sessionStorage.setItem('discord_state', stateToken)
-  const query = new URLSearchParams({ client_id: clientId, redirect_uri: redirect, response_type: 'token', scope: 'identify email', state: stateToken })
+  const query = new URLSearchParams({ client_id: clientId, redirect_uri: redirect, response_type: 'code', scope: 'identify email', state: stateToken })
   location.assign(`https://discord.com/oauth2/authorize?${query}`)
 }
 
 onMounted(async () => {
-  const oauth = new URLSearchParams(location.hash.slice(1))
-  if (!oauth.get('access_token')) return
-  history.replaceState(null, '', location.pathname + location.search)
-  if (oauth.get('state') !== sessionStorage.getItem('discord_state')) return (authError.value = 'Discord login could not be verified. Please try again.')
-  sessionStorage.removeItem('discord_state')
-  try {
-    const response = await fetch('https://discord.com/api/users/@me', { headers: { Authorization: `Bearer ${oauth.get('access_token')}` } })
-    if (!response.ok) throw new Error()
-    loginWithDiscord(await response.json())
-    if (!state.value.region) detectRegion()
-  } catch { authError.value = 'Discord login failed. Please try again.' }
+  const oauth = new URLSearchParams(location.search)
+  const code = oauth.get('code')
+  if (code) {
+    history.replaceState(null, '', location.pathname)
+    if (oauth.get('state') !== sessionStorage.getItem('discord_state')) return (authError.value = 'Discord login could not be verified. Please try again.')
+    sessionStorage.removeItem('discord_state')
+    try { await completeDiscordLogin(code) } catch (error) { authError.value = error.message || 'Discord login failed. Please try again.' }
+  } else await initialize()
+  if (user.value && !state.value.region) detectRegion()
 })
 
 function detectRegion() {
@@ -112,7 +110,7 @@ function loadYouTubeAPI() {
 async function playTrack(track) {
   current.value = track
   playing.value = true
-  markPlayed(track.id)
+  markPlayed(track).catch(() => {})
   await nextTick()
   await loadYouTubeAPI()
   if (!player) {
@@ -155,11 +153,11 @@ function nextTrack(direction = 1) {
   playTrack(queue[(index + direction + queue.length) % queue.length])
 }
 function openView(view, id = null) { activeView.value = view; selectedPlaylist.value = id; query.value = '' }
-function savePlaylist() {
-  const item = createPlaylist(playlistName.value)
+async function savePlaylist() {
+  const item = await createPlaylist(playlistName.value)
   if (item) { playlistName.value = ''; showCreate.value = false; openView('playlist', item.id) }
 }
-function signOut() { player?.destroy(); player = null; current.value = null; logout() }
+async function signOut() { player?.destroy(); player = null; current.value = null; await logout() }
 onBeforeUnmount(() => { player?.destroy(); clearInterval(progressTimer) })
 </script>
 
@@ -183,7 +181,7 @@ onBeforeUnmount(() => { player?.destroy(); clearInterval(progressTimer) })
 
       <div class="page-content">
         <template v-if="activeView === 'home'">
-          <section class="hero"><div><span class="kicker">Top pick in {{ regions[state.region || 'US'] }}</span><h1>{{ regionalTracks[0].title }}</h1><p>{{ regionalTracks[0].artist }} · Trending in your area</p><div><button class="play-cta" @click="playTrack(regionalTracks[0])">▶ Play now</button><button class="like-cta" :class="{liked: state.liked.includes(regionalTracks[0].id)}" @click="toggleLike(regionalTracks[0].id)">♡</button></div></div><img :src="regionalTracks[0].cover" :alt="regionalTracks[0].title"></section>
+          <section class="hero"><div><span class="kicker">Top pick in {{ regions[state.region || 'US'] }}</span><h1>{{ regionalTracks[0].title }}</h1><p>{{ regionalTracks[0].artist }} · Trending in your area</p><div><button class="play-cta" @click="playTrack(regionalTracks[0])">▶ Play now</button><button class="like-cta" :class="{liked: state.liked.includes(regionalTracks[0].video)}" @click="toggleLike(regionalTracks[0])">♡</button></div></div><img :src="regionalTracks[0].cover" :alt="regionalTracks[0].title"></section>
           <div class="section-title"><div><span class="kicker">Your location</span><h2>Popular near you</h2></div><button @click="openView('search')">Explore all →</button></div>
           <div class="card-grid"><article v-for="track in regionalTracks.slice(0, 5)" :key="track.id" class="music-card" @click="playTrack(track)"><div><img :src="track.cover" :alt="track.title"><button>▶</button><span>#{{ regionalTracks.indexOf(track) + 1 }}</span></div><h3>{{ track.title }}</h3><p>{{ track.artist }}</p></article></div>
           <div class="section-title compact"><div><span class="kicker">Keep listening</span><h2>Made for {{ user.name.split(' ')[0] }}</h2></div></div>
@@ -191,12 +189,12 @@ onBeforeUnmount(() => { player?.destroy(); clearInterval(progressTimer) })
 
         <section class="track-section">
           <div v-if="activeView !== 'home'" class="library-heading"><div><span class="kicker">{{ activeView === 'search' ? 'Discover' : 'Your library' }}</span><h1>{{ activeView === 'search' ? 'Search' : activeView === 'liked' ? 'Liked songs' : activeView === 'recent' ? 'Recently played' : playlist?.name }}</h1><p>{{ results.length }} songs</p></div><button v-if="playlist" class="delete-button" @click="deletePlaylist(playlist.id); openView('home')">Delete playlist</button></div>
-          <div class="track-table"><div class="track-head"><span>#</span><span>Title</span><span>Area</span><span>Time</span><span></span></div><div v-for="(track, index) in (activeView === 'home' ? regionalTracks.slice(0, 5) : results)" :key="track.id" class="track-row" :class="{playing: current?.id === track.id}" @dblclick="playTrack(track)"><span>{{ index + 1 }}</span><button class="track-name" @click="playTrack(track)"><img :src="track.cover" alt=""><span><b>{{ track.title }}</b><small>{{ track.artist }}</small></span></button><span class="area-tags"><i v-for="code in track.region.slice(0, 2)" :key="code">{{ code }}</i></span><span>{{ track.duration }}</span><button class="more" @click.stop="menuTrack = menuTrack === track.id ? null : track.id">•••<div v-if="menuTrack === track.id" class="track-menu"><strong>Add to playlist</strong><button v-for="item in state.playlists" :key="item.id" @click.stop="togglePlaylistTrack(item.id, track.id)">{{ item.trackIds.includes(track.id) ? '✓' : '+' }} {{ item.name }}</button><button @click.stop="toggleLike(track.id)">{{ state.liked.includes(track.id) ? '♥ Remove from liked' : '♡ Add to liked' }}</button></div></button></div><div v-if="!results.length && activeView !== 'home'" class="empty-state"><span>♫</span><h3>Nothing here yet</h3><p>Search for music or add songs to this playlist.</p></div></div>
+          <div class="track-table"><div class="track-head"><span>#</span><span>Title</span><span>Area</span><span>Time</span><span></span></div><div v-for="(track, index) in (activeView === 'home' ? regionalTracks.slice(0, 5) : results)" :key="track.id" class="track-row" :class="{playing: current?.id === track.id}" @dblclick="playTrack(track)"><span>{{ index + 1 }}</span><button class="track-name" @click="playTrack(track)"><img :src="track.cover" alt=""><span><b>{{ track.title }}</b><small>{{ track.artist }}</small></span></button><span class="area-tags"><i v-for="code in track.region.slice(0, 2)" :key="code">{{ code }}</i></span><span>{{ track.duration }}</span><button class="more" @click.stop="menuTrack = menuTrack === track.id ? null : track.id">•••<div v-if="menuTrack === track.id" class="track-menu"><strong>Add to playlist</strong><button v-for="item in state.playlists" :key="item.id" @click.stop="togglePlaylistTrack(item.id, track)">{{ item.trackIds.includes(track.video) ? '✓' : '+' }} {{ item.name }}</button><button @click.stop="toggleLike(track)">{{ state.liked.includes(track.video) ? '♥ Remove from liked' : '♡ Add to liked' }}</button></div></button></div><div v-if="!results.length && activeView !== 'home'" class="empty-state"><span>♫</span><h3>Nothing here yet</h3><p>Search for music or add songs to this playlist.</p></div></div>
         </section>
       </div>
     </section>
 
-    <footer class="player" :class="{empty: !current}"><div class="now-playing"><div v-if="current" class="mini-video"><div ref="playerHost"></div></div><div v-else class="empty-cover">♫</div><div><b>{{ current?.title || 'Choose something to play' }}</b><small>{{ current?.artist || 'Your music will appear here' }}</small></div><button v-if="current" class="player-like" :class="{liked: state.liked.includes(current.id)}" @click="toggleLike(current.id)">♡</button></div><div class="transport"><div><button @click="nextTrack(-1)">↤</button><button class="main-play" @click="togglePlayback">{{ playing ? 'Ⅱ' : '▶' }}</button><button @click="nextTrack(1)">↦</button></div><div class="seek-row"><time>{{ formatTime(progress) }}</time><input v-model.number="progress" class="seek" type="range" min="0" :max="duration || 1" step="0.1" :style="{'--played': `${duration ? progress / duration * 100 : 0}%`}" @input="seek"><time>{{ formatTime(duration) }}</time></div></div><div class="volume"><button class="lyrics-button" :class="{active: showLyrics}" :disabled="!current" @click="toggleLyrics">Lyrics</button><span>▾</span><input v-model="volume" type="range" min="0" max="100" @input="changeVolume"></div></footer><aside v-if="showLyrics" class="lyrics-panel"><header><div><span class="kicker">Now singing</span><h2>Lyrics</h2></div><button @click="showLyrics = false">×</button></header><div class="lyrics-scroll"><p v-if="lyricsLoading">Finding the words…</p><button v-for="(line,index) in lyrics" v-else :key="index" :class="{active:index === activeLyric, past:index < activeLyric}" @click="line.time >= 0 && (progress = line.time, seek())">{{ line.text }}</button></div><small>Lyrics by <a href="https://lrclib.net" target="_blank">LRCLIB ↗</a> · open source</small></aside>
+    <footer class="player" :class="{empty: !current}"><div class="now-playing"><div v-if="current" class="mini-video"><div ref="playerHost"></div></div><div v-else class="empty-cover">♫</div><div><b>{{ current?.title || 'Choose something to play' }}</b><small>{{ current?.artist || 'Your music will appear here' }}</small></div><button v-if="current" class="player-like" :class="{liked: state.liked.includes(current.video)}" @click="toggleLike(current)">♡</button></div><div class="transport"><div><button @click="nextTrack(-1)">↤</button><button class="main-play" @click="togglePlayback">{{ playing ? 'Ⅱ' : '▶' }}</button><button @click="nextTrack(1)">↦</button></div><div class="seek-row"><time>{{ formatTime(progress) }}</time><input v-model.number="progress" class="seek" type="range" min="0" :max="duration || 1" step="0.1" :style="{'--played': `${duration ? progress / duration * 100 : 0}%`}" @input="seek"><time>{{ formatTime(duration) }}</time></div></div><div class="volume"><button class="lyrics-button" :class="{active: showLyrics}" :disabled="!current" @click="toggleLyrics">Lyrics</button><span>▾</span><input v-model="volume" type="range" min="0" max="100" @input="changeVolume"></div></footer><aside v-if="showLyrics" class="lyrics-panel"><header><div><span class="kicker">Now singing</span><h2>Lyrics</h2></div><button @click="showLyrics = false">×</button></header><div class="lyrics-scroll"><p v-if="lyricsLoading">Finding the words…</p><button v-for="(line,index) in lyrics" v-else :key="index" :class="{active:index === activeLyric, past:index < activeLyric}" @click="line.time >= 0 && (progress = line.time, seek())">{{ line.text }}</button></div><small>Lyrics by <a href="https://lrclib.net" target="_blank">LRCLIB ↗</a> · open source</small></aside>
 
     <div v-if="showCreate" class="modal" @click.self="showCreate = false"><form @submit.prevent="savePlaylist"><button type="button" class="close" @click="showCreate = false">×</button><span class="kicker">Your library</span><h2>New playlist</h2><p>Start a collection for any moment.</p><label>Name<input v-model="playlistName" maxlength="40" placeholder="Playlist name" autofocus required></label><button class="play-cta" type="submit">Create playlist</button></form></div>
   </div>

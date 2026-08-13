@@ -1,0 +1,12 @@
+# Allow the Authorization header to reach PHP (needed for Bearer tokens on
+# some Apache/mod_php/mod_fcgid setups that strip it by default).
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>
+
+# Never serve config.php or includes/ directly
+<FilesMatch "^config\.php$">
+    Require all denied
+</FilesMatch>
