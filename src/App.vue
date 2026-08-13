@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from './composables/useAppStore'
+import { createOAuthState } from './services/oauth'
 
 const tracks = [
   { id: 1, title: 'Blinding Lights', artist: 'The Weeknd', region: ['US','CA','GB'], video: '4NRXx6U8ABQ', color: '#b72d38', cover: 'https://i.ytimg.com/vi/4NRXx6U8ABQ/hqdefault.jpg', duration: '4:21' },
@@ -56,10 +57,17 @@ const results = computed(() => {
 })
 
 function loginWithDiscordRedirect() {
+  authError.value = ''
   const clientId = import.meta.env.VITE_DISCORD_CLIENT_ID
   if (!clientId) return (authError.value = 'Add VITE_DISCORD_CLIENT_ID to your .env file to enable Discord login.')
   const redirect = import.meta.env.VITE_DISCORD_REDIRECT_URI || `${location.origin}${location.pathname}`
-  const stateToken = crypto.randomUUID()
+  let stateToken
+  try {
+    stateToken = createOAuthState()
+  } catch (error) {
+    authError.value = error.message
+    return
+  }
   sessionStorage.setItem('discord_state', stateToken)
   const query = new URLSearchParams({ client_id: clientId, redirect_uri: redirect, response_type: 'code', scope: 'identify email', state: stateToken })
   location.assign(`https://discord.com/oauth2/authorize?${query}`)
