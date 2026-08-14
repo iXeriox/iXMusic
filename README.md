@@ -17,6 +17,8 @@ npm run dev
 ```
 
 The Discord client secret must only be configured on the PHP server. The browser receives an authorization code, and `/api/auth.php?action=discord` exchanges it securely before issuing the app's normal JWT.
+Discord authorization opens in a focused pop-up after an in-app permission
+summary, so the main player does not navigate away or lose its current state.
 
 YouTube discovery and realistic regional recommendations use the server-side
 `/api/youtube.php` proxy, so `YOUTUBE_API_KEY` must also be set. Administrators

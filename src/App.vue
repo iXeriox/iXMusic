@@ -17,6 +17,8 @@ const tracks = [
 const regions = { US: 'United States', GB: 'United Kingdom', CA: 'Canada', AU: 'Australia', DE: 'Germany', FR: 'France', NG: 'Nigeria', ZA: 'South Africa' }
 const { state, user, initialize, completeDiscordLogin, logout, setRegion, createPlaylist, deletePlaylist, togglePlaylistTrack, toggleLike, markPlayed, searchYouTube, loadManagement, updateUser, removeUser, blockTrack, unblockTrack, saveSettings, loadProfile } = useAppStore()
 const authError = ref('')
+const showDiscordDialog = ref(false)
+const authLoading = ref(false)
 const activeView = ref('home')
 const selectedPlaylist = ref(null)
 const query = ref('')
@@ -33,6 +35,7 @@ const duration = ref(0)
 const showLyrics = ref(false)
 const lyrics = ref([])
 const lyricsLoading = ref(false)
+const playbackLoading = ref(false)
 const searchResults = ref([])
 const searchLoading = ref(false)
 const popularTracks = ref([])
@@ -65,7 +68,7 @@ const results = computed(() => {
   return term ? source.filter(track => `${track.title} ${track.artist}`.toLowerCase().includes(term)) : source
 })
 
-function loginWithDiscordRedirect() {
+function loginWithDiscordPopup() {
   authError.value = ''
   const clientId = import.meta.env.VITE_DISCORD_CLIENT_ID
   if (!clientId) return (authError.value = 'Add VITE_DISCORD_CLIENT_ID to your .env file to enable Discord login.')
@@ -77,25 +80,49 @@ function loginWithDiscordRedirect() {
     authError.value = error.message
     return
   }
-  sessionStorage.setItem('discord_state', stateToken)
+  localStorage.setItem('discord_oauth_state', stateToken)
   const query = new URLSearchParams({ client_id: clientId, redirect_uri: redirect, response_type: 'code', scope: 'identify email', state: stateToken })
-  location.assign(`https://discord.com/oauth2/authorize?${query}`)
+  const popup = window.open(`https://discord.com/oauth2/authorize?${query}`, 'ixmusic-discord', 'popup,width=520,height=760')
+  if (!popup) {
+    authError.value = 'Your browser blocked the Discord sign-in window. Allow pop-ups for iXMusic and try again.'
+    return
+  }
+  authLoading.value = true
+  showDiscordDialog.value = false
+  const closedCheck = window.setInterval(() => {
+    if (!popup.closed) return
+    clearInterval(closedCheck)
+    window.setTimeout(() => { if (!user.value) authLoading.value = false }, 250)
+  }, 400)
 }
 
 onMounted(async () => {
   const oauth = new URLSearchParams(location.search)
   const code = oauth.get('code')
   if (code) {
-    history.replaceState(null, '', location.pathname)
-    if (oauth.get('state') !== sessionStorage.getItem('discord_state')) return (authError.value = 'Discord login could not be verified. Please try again.')
-    sessionStorage.removeItem('discord_state')
-    try { await completeDiscordLogin(code) } catch (error) { authError.value = error.message || 'Discord login failed. Please try again.' }
+    if (oauth.get('state') !== localStorage.getItem('discord_oauth_state')) return (authError.value = 'Discord login could not be verified. Please try again.')
+    localStorage.removeItem('discord_oauth_state')
+    try {
+      await completeDiscordLogin(code)
+      if (window.opener) { window.opener.postMessage({ type: 'ixmusic:discord-complete' }, location.origin); window.close(); return }
+      history.replaceState(null, '', location.pathname)
+    } catch (error) {
+      if (window.opener) window.opener.postMessage({ type: 'ixmusic:discord-error', message: error.message }, location.origin)
+      authError.value = error.message || 'Discord login failed. Please try again.'
+    }
   } else await initialize()
   if (user.value && !state.value.region) detectRegion()
   if (user.value) {
     applyTheme(state.value.settings)
     try { popularTracks.value = await searchYouTube(`${regions[state.value.region || 'US']} top songs`, true) } catch { popularTracks.value = tracks }
   }
+})
+
+window.addEventListener('message', async event => {
+  if (event.origin !== location.origin || !event.data?.type?.startsWith('ixmusic:discord-')) return
+  authLoading.value = false
+  if (event.data.type === 'ixmusic:discord-complete') await initialize()
+  else authError.value = event.data.message || 'Discord login failed. Please try again.'
 })
 
 watch(query, value => {
@@ -148,6 +175,7 @@ function loadYouTubeAPI() {
 
 async function playTrack(track) {
   if (track.blocked) return
+  playbackLoading.value = true
   current.value = track
   playing.value = true
   markPlayed(track).catch(() => {})
@@ -158,12 +186,13 @@ async function playTrack(track) {
       player = new window.YT.Player(playerHost.value, {
       videoId: track.video,
       playerVars: { autoplay: 1, controls: 0, rel: 0, playsinline: 1, enablejsapi: 1 },
-      events: { onReady: event => { player = event.target; event.target.setVolume(volume.value); duration.value = event.target.getDuration(); event.target.playVideo(); resolve(event.target) }, onStateChange: event => { playing.value = event.data === 1; duration.value = event.target.getDuration() || duration.value } }
+      events: { onReady: event => { player = event.target; event.target.setVolume(volume.value); duration.value = event.target.getDuration(); event.target.playVideo(); playbackLoading.value = false; resolve(event.target) }, onStateChange: event => { playing.value = event.data === 1; duration.value = event.target.getDuration() || duration.value; if ([1,2,0].includes(event.data)) playbackLoading.value = false }, onError: () => { playbackLoading.value = false; playing.value = false } }
       })
     })
   } else {
     const readyPlayer = await playerReady
     readyPlayer.loadVideoById(track.video)
+    window.setTimeout(() => { playbackLoading.value = false }, 4000)
   }
 }
 function seek() { player?.seekTo(Number(progress.value), true) }
@@ -212,7 +241,8 @@ onBeforeUnmount(() => { player?.destroy(); clearInterval(progressTimer) })
 <template>
   <main v-if="!user" class="auth-page">
     <section class="auth-story"><a class="logo"><span>iX</span>Music</a><div class="story-content"><span class="kicker">Your sound. Everywhere.</span><h1>Music that<br><em>moves with you.</em></h1><p>Local hits, global discoveries, and every playlist you make—powered cleanly by YouTube.</p><div class="signal"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div><small>Listen freely · Built for discovery</small></section>
-    <section class="auth-panel"><div class="auth-card"><span class="mobile-logo">iXMusic</span><span class="kicker">Members only</span><h2>Welcome to your sound.</h2><p>One click gets you back to the music, playlists, and discoveries waiting for you.</p><button class="discord-login" @click="loginWithDiscordRedirect"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.5 5.3A16.3 16.3 0 0015.4 4l-.5 1.1a15 15 0 00-5.8 0L8.6 4a16.7 16.7 0 00-4.1 1.3C1.9 9.1 1.2 12.8 1.6 16.4a16.8 16.8 0 005 2.5l1.2-1.7c-.7-.3-1.3-.6-1.9-1 4.1 2 8.3 2 12.4 0-.6.4-1.2.7-1.9 1l1.2 1.7a16.7 16.7 0 005-2.5c.5-4.2-.8-7.8-3.1-11.1zM8.9 14.4c-1 0-1.9-1-1.9-2.2S7.8 10 8.9 10s1.9 1 1.9 2.2-.9 2.2-1.9 2.2zm6.2 0c-1 0-1.9-1-1.9-2.2s.8-2.2 1.9-2.2 1.9 1 1.9 2.2-.8 2.2-1.9 2.2z"/></svg><span>Continue with Discord</span><b>→</b></button><p v-if="authError" class="form-error">{{ authError }}</p><div class="auth-divider"><span>Secure authentication by Discord</span></div><p class="auth-note">We only request your basic profile and email. Your Discord password never touches iXMusic.</p></div></section>
+    <section class="auth-panel"><div class="auth-card"><span class="mobile-logo">iXMusic</span><span class="kicker">Members only</span><h2>Welcome to your sound.</h2><p>One click gets you back to the music, playlists, and discoveries waiting for you.</p><button class="discord-login" :disabled="authLoading" @click="showDiscordDialog = true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.5 5.3A16.3 16.3 0 0015.4 4l-.5 1.1a15 15 0 00-5.8 0L8.6 4a16.7 16.7 0 00-4.1 1.3C1.9 9.1 1.2 12.8 1.6 16.4a16.8 16.8 0 005 2.5l1.2-1.7c-.7-.3-1.3-.6-1.9-1 4.1 2 8.3 2 12.4 0-.6.4-1.2.7-1.9 1l1.2 1.7a16.7 16.7 0 005-2.5c.5-4.2-.8-7.8-3.1-11.1zM8.9 14.4c-1 0-1.9-1-1.9-2.2S7.8 10 8.9 10s1.9 1 1.9 2.2-.9 2.2-1.9 2.2zm6.2 0c-1 0-1.9-1-1.9-2.2s.8-2.2 1.9-2.2 1.9 1 1.9 2.2-.8 2.2-1.9 2.2z"/></svg><span>{{ authLoading ? 'Waiting for Discord…' : 'Continue with Discord' }}</span><b>→</b></button><p v-if="authError" class="form-error">{{ authError }}</p><div class="auth-divider"><span>Secure authentication by Discord</span></div><p class="auth-note">We only request your basic profile and email. Your Discord password never touches iXMusic.</p></div></section>
+    <div v-if="showDiscordDialog" class="discord-consent" @click.self="showDiscordDialog = false"><section><button class="consent-close" @click="showDiscordDialog = false">×</button><span class="discord-badge">Discord</span><h2>Connect your account?</h2><p>Discord will ask you to authorize iXMusic in a separate secure window. This page and your music stay exactly where they are.</p><div class="permission"><span>✓</span><div><b>View your basic profile</b><small>Username, display name, and avatar</small></div></div><div class="permission"><span>✓</span><div><b>View your email address</b><small>Used to identify your iXMusic account</small></div></div><div class="consent-note">iXMusic cannot read your messages, servers, or friends and never receives your Discord password.</div><div class="consent-actions"><button @click="showDiscordDialog = false">Cancel</button><button class="discord-confirm" @click="loginWithDiscordPopup">Open Discord</button></div></section></div>
   </main>
 
   <div v-else class="music-app">
@@ -246,7 +276,7 @@ onBeforeUnmount(() => { player?.destroy(); clearInterval(progressTimer) })
       </div>
     </section>
 
-    <footer class="player" :class="{empty: !current}"><div class="now-playing"><div v-if="current" class="mini-video"><div ref="playerHost"></div></div><div v-else class="empty-cover">♫</div><div><b>{{ current?.title || 'Choose something to play' }}</b><small>{{ current?.artist || 'Your music will appear here' }}</small></div><button v-if="current" class="player-like" :class="{liked: state.liked.includes(current.video)}" @click="toggleLike(current)">♡</button></div><div class="transport"><div><button @click="nextTrack(-1)">↤</button><button class="main-play" @click="togglePlayback">{{ playing ? 'Ⅱ' : '▶' }}</button><button @click="nextTrack(1)">↦</button></div><div class="seek-row"><time>{{ formatTime(progress) }}</time><input v-model.number="progress" class="seek" type="range" min="0" :max="duration || 1" step="0.1" :style="{'--played': `${duration ? progress / duration * 100 : 0}%`}" @input="seek"><time>{{ formatTime(duration) }}</time></div></div><div class="volume"><button class="lyrics-button" :class="{active: showLyrics}" :disabled="!current" @click="toggleLyrics">Lyrics</button><span>▾</span><input v-model="volume" type="range" min="0" max="100" @input="changeVolume"></div></footer><aside v-if="showLyrics" class="lyrics-panel"><header><div><span class="kicker">Now singing</span><h2>Lyrics</h2></div><button @click="showLyrics = false">×</button></header><div class="lyrics-scroll"><p v-if="lyricsLoading">Finding the words…</p><button v-for="(line,index) in lyrics" v-else :key="index" :class="{active:index === activeLyric, past:index < activeLyric}" @click="line.time >= 0 && (progress = line.time, seek())">{{ line.text }}</button></div><small>Lyrics by <a href="https://lrclib.net" target="_blank">LRCLIB ↗</a> · open source</small></aside>
+    <footer class="player" :class="{empty: !current}"><div v-if="playbackLoading" class="player-loading"><span/><div><b>Loading from YouTube</b><small>Preparing your audio without leaving iXMusic…</small></div></div><div class="now-playing"><div v-if="current" class="mini-video"><div ref="playerHost"></div></div><div v-else class="empty-cover">♫</div><div><b>{{ current?.title || 'Choose something to play' }}</b><small>{{ current?.artist || 'Your music will appear here' }}</small></div><button v-if="current" class="player-like" :class="{liked: state.liked.includes(current.video)}" @click="toggleLike(current)">♡</button></div><div class="transport"><div><button @click="nextTrack(-1)">↤</button><button class="main-play" @click="togglePlayback">{{ playing ? 'Ⅱ' : '▶' }}</button><button @click="nextTrack(1)">↦</button></div><div class="seek-row"><time>{{ formatTime(progress) }}</time><input v-model.number="progress" class="seek" type="range" min="0" :max="duration || 1" step="0.1" :style="{'--played': `${duration ? progress / duration * 100 : 0}%`}" @input="seek"><time>{{ formatTime(duration) }}</time></div></div><div class="volume"><button class="lyrics-button" :class="{active: showLyrics}" :disabled="!current" @click="toggleLyrics">Lyrics</button><span>▾</span><input v-model="volume" type="range" min="0" max="100" @input="changeVolume"></div></footer><aside v-if="showLyrics" class="lyrics-panel"><header><div><span class="kicker">Now singing</span><h2>Lyrics</h2></div><button @click="showLyrics = false">×</button></header><div class="lyrics-scroll"><p v-if="lyricsLoading">Finding the words…</p><button v-for="(line,index) in lyrics" v-else :key="index" :class="{active:index === activeLyric, past:index < activeLyric}" @click="line.time >= 0 && (progress = line.time, seek())">{{ line.text }}</button></div><small>Lyrics by <a href="https://lrclib.net" target="_blank">LRCLIB ↗</a> · open source</small></aside>
 
     <div v-if="showCreate" class="modal" @click.self="showCreate = false"><form @submit.prevent="savePlaylist"><button type="button" class="close" @click="showCreate = false">×</button><span class="kicker">Your library</span><h2>New playlist</h2><p>Start a collection for any moment.</p><label>Name<input v-model="playlistName" maxlength="40" placeholder="Playlist name" autofocus required></label><label class="public-toggle"><input v-model="publicPlaylist" type="checkbox"> Make this playlist public</label><button class="play-cta" type="submit">Create playlist</button></form></div>
   </div>
