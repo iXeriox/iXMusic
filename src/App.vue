@@ -72,7 +72,7 @@ function loginWithDiscordPopup() {
   authError.value = ''
   const clientId = import.meta.env.VITE_DISCORD_CLIENT_ID
   if (!clientId) return (authError.value = 'Add VITE_DISCORD_CLIENT_ID to your .env file to enable Discord login.')
-  const redirect = import.meta.env.VITE_DISCORD_REDIRECT_URI || `${location.origin}${location.pathname}`
+  const redirect = import.meta.env.VITE_DISCORD_REDIRECT_URI || `http://217.154.51.240:5173/`
   let stateToken
   try {
     stateToken = createOAuthState()
@@ -97,24 +97,114 @@ function loginWithDiscordPopup() {
 }
 
 onMounted(async () => {
-  const oauth = new URLSearchParams(location.search)
+  const oauth = new URLSearchParams(window.location.search)
   const code = oauth.get('code')
+  const oauthError = oauth.get('error')
+  const oauthErrorDescription = oauth.get('error_description')
+
+  // Discord explicitly returned an OAuth error
+  if (oauthError) {
+    const message =
+        oauthErrorDescription ||
+        `Discord authentication failed: ${oauthError}`
+
+    if (window.opener) {
+      window.opener.postMessage({
+        type: 'ixmusic:discord-error',
+        message
+      }, window.location.origin)
+
+      window.close()
+      return
+    }
+
+    authError.value = message
+    await initialize()
+    return
+  }
+
+  // OAuth callback
   if (code) {
-    if (oauth.get('state') !== localStorage.getItem('discord_oauth_state')) return (authError.value = 'Discord login could not be verified. Please try again.')
+    const returnedState = oauth.get('state')
+    const expectedState = localStorage.getItem('discord_oauth_state')
+
+    if (!expectedState || returnedState !== expectedState) {
+      localStorage.removeItem('discord_oauth_state')
+
+      const message =
+          'Discord login could not be verified. Please try again.'
+
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'ixmusic:discord-error',
+          message
+        }, window.location.origin)
+
+        window.close()
+        return
+      }
+
+      authError.value = message
+      return
+    }
+
     localStorage.removeItem('discord_oauth_state')
+
     try {
       await completeDiscordLogin(code)
-      if (window.opener) { window.opener.postMessage({ type: 'ixmusic:discord-complete' }, location.origin); window.close(); return }
-      history.replaceState(null, '', location.pathname)
+
+      // Remove ?code=...&state=... from URL
+      history.replaceState(
+          null,
+          '',
+          window.location.pathname
+      )
+
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'ixmusic:discord-complete'
+        }, window.location.origin)
+
+        window.close()
+        return
+      }
     } catch (error) {
-      if (window.opener) window.opener.postMessage({ type: 'ixmusic:discord-error', message: error.message }, location.origin)
-      authError.value = error.message || 'Discord login failed. Please try again.'
+      const message =
+          error?.message ||
+          'Discord login failed. Please try again.'
+
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'ixmusic:discord-error',
+          message
+        }, window.location.origin)
+
+        window.close()
+        return
+      }
+
+      authError.value = message
     }
-  } else await initialize()
-  if (user.value && !state.value.region) detectRegion()
+  } else {
+    await initialize()
+  }
+
+  // Normal signed-in initialization
+  if (user.value && !state.value.region) {
+    detectRegion()
+  }
+
   if (user.value) {
     applyTheme(state.value.settings)
-    try { popularTracks.value = await searchYouTube(`${regions[state.value.region || 'US']} top songs`, true) } catch { popularTracks.value = tracks }
+
+    try {
+      popularTracks.value = await searchYouTube(
+          `${regions[state.value.region || 'US']} top songs`,
+          true
+      )
+    } catch {
+      popularTracks.value = tracks
+    }
   }
 })
 
