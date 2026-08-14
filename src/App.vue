@@ -285,21 +285,79 @@ async function playTrack(track) {
     window.setTimeout(() => { playbackLoading.value = false }, 4000)
   }
 }
+function seekToLyric(line) {
+  if (line.time < 0) return
+
+  progress.value = line.time
+  seek()
+}
 function seek() { player?.seekTo(Number(progress.value), true) }
 function formatTime(value) { const seconds = Math.max(0, Math.floor(value || 0)); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` }
 async function toggleLyrics() {
   showLyrics.value = !showLyrics.value
-  if (!showLyrics.value || !current.value || lyrics.value.length) return
+
+  if (!showLyrics.value || !current.value || lyrics.value.length) {
+    return
+  }
+
   lyricsLoading.value = true
+
   try {
-    const params = new URLSearchParams({ track_name: current.value.title, artist_name: current.value.artist })
-    const response = await fetch(`https://lrclib.net/api/get?${params}`, { headers: { 'Lrclib-Client': 'iXMusic v2.0' } })
-    if (!response.ok) throw new Error()
+    const params = new URLSearchParams({
+      track_name: current.value.title,
+      artist_name: current.value.artist
+    })
+
+    const response = await fetch(
+        `https://lrclib.net/api/get?${params}`,
+        {
+          headers: {
+            'Lrclib-Client': 'iXMusic v2.0'
+          }
+        }
+    )
+
+    if (!response.ok) {
+      lyrics.value = [{
+        time: -1,
+        text: 'Lyrics are not available for this track yet.'
+      }]
+      return
+    }
+
     const data = await response.json()
-    lyrics.value = (data.syncedLyrics || '').split('\n').map(line => { const m = line.match(/^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/); return m ? { time: +m[1] * 60 + +m[2], text: m[3].trim() } : null }).filter(line => line?.text)
-    if (!lyrics.value.length && data.plainLyrics) lyrics.value = data.plainLyrics.split('\n').filter(Boolean).map(text => ({ time: -1, text }))
-  } catch { lyrics.value = [{ time: -1, text: 'Lyrics are not available for this track yet.' }] }
-  finally { lyricsLoading.value = false }
+
+    lyrics.value = (data.syncedLyrics || '')
+        .split('\n')
+        .map(line => {
+          const match = line.match(/^\[(\d+):(\d+(?:\.\d+)?)](.*)$/)
+
+          return match
+              ? {
+                time: Number(match[1]) * 60 + Number(match[2]),
+                text: match[3].trim()
+              }
+              : null
+        })
+        .filter(line => line?.text)
+
+    if (!lyrics.value.length && data.plainLyrics) {
+      lyrics.value = data.plainLyrics
+          .split('\n')
+          .filter(Boolean)
+          .map(text => ({
+            time: -1,
+            text
+          }))
+    }
+  } catch {
+    lyrics.value = [{
+      time: -1,
+      text: 'Lyrics are not available for this track yet.'
+    }]
+  } finally {
+    lyricsLoading.value = false
+  }
 }
 const activeLyric = computed(() => lyrics.value.findLastIndex(line => line.time >= 0 && line.time <= progress.value + .2))
 watch(() => current.value?.id, () => { lyrics.value = []; showLyrics.value = false; progress.value = 0 })
@@ -357,7 +415,52 @@ onBeforeUnmount(() => { player?.destroy(); clearInterval(progressTimer) })
 
         <section v-if="!['management','profile'].includes(activeView)" class="track-section">
           <div v-if="activeView !== 'home'" class="library-heading"><div><span class="kicker">{{ activeView === 'search' ? 'YouTube music discovery' : 'Your library' }}</span><h1>{{ activeView === 'search' ? 'Search' : activeView === 'liked' ? 'Liked songs' : activeView === 'recent' ? 'Recently played' : playlist?.name }}</h1><button v-if="playlist?.is_public && playlist.user_id" class="owner-link" @click="openProfile(playlist.user_id)">View {{ playlist.owner_username }}'s profile →</button><p>{{ searchLoading ? 'Searching YouTube…' : `${results.length} songs` }}</p></div><button v-if="playlist" class="delete-button" @click="deletePlaylist(playlist.id); openView('home')">Delete playlist</button></div>
-          <div class="track-table"><div class="track-head"><span>#</span><span>Title</span><span>Source</span><span>Time</span><span></span></div><div v-for="(track, index) in (activeView === 'home' ? regionalTracks.slice(0, 5) : results)" :key="track.id || track.video" class="track-row" :class="{playing: current?.video === track.video, blocked: track.blocked}" @dblclick="playTrack(track)"><span>{{ index + 1 }}</span><button class="track-name" :disabled="track.blocked" @click="playTrack(track)"><img :src="track.cover" alt=""><span><b>{{ track.blocked ? 'Unavailable' : track.title }}</b><small>{{ track.blocked ? track.blocked_message : track.artist }}</small></span></button><span class="area-tags"><i>YouTube</i></span><span>{{ track.duration }}</span><button class="more" @click.stop="menuTrack = menuTrack === track.video ? null : track.video">•••<div v-if="menuTrack === track.video" class="track-menu"><strong>Add to playlist</strong><button v-for="item in state.playlists" :key="item.id" @click.stop="togglePlaylistTrack(item.id, track)">{{ item.trackIds.includes(track.video) ? '✓' : '+' }} {{ item.name }}</button><button @click.stop="toggleLike(track)">{{ state.liked.includes(track.video) ? '♥ Remove from liked' : '♡ Add to liked' }}</button><button v-if="['moderator','admin'].includes(user.role)" @click.stop="blockTrack(track, 'Removed by the iXMusic moderation team.')">⊘ Hide from discovery</button></div></button></div><div v-if="!results.length && activeView !== 'home'" class="empty-state"><span>♫</span><h3>{{ activeView === 'search' ? 'Search all of YouTube Music' : 'Nothing here yet' }}</h3><p>{{ activeView === 'search' ? 'Type a song, artist, or album above.' : 'Search for music or add songs to this playlist.' }}</p></div></div>
+          <div class="track-table"><div class="track-head"><span>#</span><span>Title</span><span>Source</span><span>Time</span><span></span></div><div v-for="(track, index) in (activeView === 'home' ? regionalTracks.slice(0, 5) : results)" :key="track.id || track.video" class="track-row" :class="{playing: current?.video === track.video, blocked: track.blocked}" @dblclick="playTrack(track)"><span>{{ index + 1 }}</span><button class="track-name" :disabled="track.blocked" @click="playTrack(track)"><img :src="track.cover" alt=""><span><b>{{ track.blocked ? 'Unavailable' : track.title }}</b><small>{{ track.blocked ? track.blocked_message : track.artist }}</small></span></button><span class="area-tags"><i>YouTube</i></span><span>{{ track.duration }}</span><div class="more-wrapper">
+            <button
+                class="more"
+                type="button"
+                @click.stop="menuTrack = menuTrack === track.video ? null : track.video"
+            >
+              •••
+            </button>
+
+            <div
+                v-if="menuTrack === track.video"
+                class="track-menu"
+                @click.stop
+            >
+              <strong>Add to playlist</strong>
+
+              <button
+                  v-for="item in state.playlists"
+                  :key="item.id"
+                  type="button"
+                  @click="togglePlaylistTrack(item.id, track)"
+              >
+                {{ item.trackIds.includes(track.video) ? '✓' : '+' }}
+                {{ item.name }}
+              </button>
+
+              <button
+                  type="button"
+                  @click="toggleLike(track)"
+              >
+                {{
+                  state.liked.includes(track.video)
+                      ? '♥ Remove from liked'
+                      : '♡ Add to liked'
+                }}
+              </button>
+
+              <button
+                  v-if="['moderator', 'admin'].includes(user.role)"
+                  type="button"
+                  @click="blockTrack(track, 'Removed by the iXMusic moderation team.')"
+              >
+                ⊘ Hide from discovery
+              </button>
+            </div>
+          </div></div><div v-if="!results.length && activeView !== 'home'" class="empty-state"><span>♫</span><h3>{{ activeView === 'search' ? 'Search all of YouTube Music' : 'Nothing here yet' }}</h3><p>{{ activeView === 'search' ? 'Type a song, artist, or album above.' : 'Search for music or add songs to this playlist.' }}</p></div></div>
         </section>
 
         <section v-if="activeView === 'management'" class="management"><div class="library-heading"><div><span class="kicker">Team controls</span><h1>App management</h1><p>Moderate members, discovery, and the iXMusic experience.</p></div></div><div v-if="user.role === 'admin'" class="management-card"><h2>Appearance</h2><label>Primary accent <input v-model="adminColors.accent_color" type="color"></label><label>Secondary accent <input v-model="adminColors.accent_secondary" type="color"></label><button class="play-cta" @click="updateColors">Save colors</button></div><div class="management-card"><h2>Members</h2><div v-for="member in state.users" :key="member.id" class="member-row"><img v-if="member.avatar_url" :src="member.avatar_url" alt=""><span><b>{{ member.display_name }}</b><small>{{ member.email }} · {{ member.role }}</small></span><select v-if="user.role === 'admin'" :value="member.role" @change="updateUser(member.id,{role:$event.target.value})"><option>user</option><option>moderator</option><option>admin</option></select><button :disabled="member.id === user.id" @click="updateUser(member.id,{status:member.status === 'active' ? 'suspended' : 'active'})">{{ member.status === 'active' ? 'Suspend' : 'Reactivate' }}</button><button v-if="user.role === 'admin'" :disabled="member.id === user.id" @click="removeUser(member.id)">Remove</button></div></div><div class="management-card"><h2>Hidden songs</h2><div v-for="item in state.blocked" :key="item.youtube_video_id" class="member-row"><span><b>{{ item.youtube_video_id }}</b><small>{{ item.reason }}</small></span><button @click="unblockTrack(item.youtube_video_id)">Restore</button></div><p v-if="!state.blocked.length">No songs are hidden.</p></div></section>
@@ -366,7 +469,7 @@ onBeforeUnmount(() => { player?.destroy(); clearInterval(progressTimer) })
       </div>
     </section>
 
-    <footer class="player" :class="{empty: !current}"><div v-if="playbackLoading" class="player-loading"><span/><div><b>Loading from YouTube</b><small>Preparing your audio without leaving iXMusic…</small></div></div><div class="now-playing"><div v-if="current" class="mini-video"><div ref="playerHost"></div></div><div v-else class="empty-cover">♫</div><div><b>{{ current?.title || 'Choose something to play' }}</b><small>{{ current?.artist || 'Your music will appear here' }}</small></div><button v-if="current" class="player-like" :class="{liked: state.liked.includes(current.video)}" @click="toggleLike(current)">♡</button></div><div class="transport"><div><button @click="nextTrack(-1)">↤</button><button class="main-play" @click="togglePlayback">{{ playing ? 'Ⅱ' : '▶' }}</button><button @click="nextTrack(1)">↦</button></div><div class="seek-row"><time>{{ formatTime(progress) }}</time><input v-model.number="progress" class="seek" type="range" min="0" :max="duration || 1" step="0.1" :style="{'--played': `${duration ? progress / duration * 100 : 0}%`}" @input="seek"><time>{{ formatTime(duration) }}</time></div></div><div class="volume"><button class="lyrics-button" :class="{active: showLyrics}" :disabled="!current" @click="toggleLyrics">Lyrics</button><span>▾</span><input v-model="volume" type="range" min="0" max="100" @input="changeVolume"></div></footer><aside v-if="showLyrics" class="lyrics-panel"><header><div><span class="kicker">Now singing</span><h2>Lyrics</h2></div><button @click="showLyrics = false">×</button></header><div class="lyrics-scroll"><p v-if="lyricsLoading">Finding the words…</p><button v-for="(line,index) in lyrics" v-else :key="index" :class="{active:index === activeLyric, past:index < activeLyric}" @click="line.time >= 0 && (progress = line.time, seek())">{{ line.text }}</button></div><small>Lyrics by <a href="https://lrclib.net" target="_blank">LRCLIB ↗</a> · open source</small></aside>
+    <footer class="player" :class="{empty: !current}"><div v-if="playbackLoading" class="player-loading"><span/><div><b>Loading from YouTube</b><small>Preparing your audio without leaving iXMusic…</small></div></div><div class="now-playing"><div v-if="current" class="mini-video"><div ref="playerHost"></div></div><div v-else class="empty-cover">♫</div><div><b>{{ current?.title || 'Choose something to play' }}</b><small>{{ current?.artist || 'Your music will appear here' }}</small></div><button v-if="current" class="player-like" :class="{liked: state.liked.includes(current.video)}" @click="toggleLike(current)">♡</button></div><div class="transport"><div><button @click="nextTrack(-1)">↤</button><button class="main-play" @click="togglePlayback">{{ playing ? 'Ⅱ' : '▶' }}</button><button @click="nextTrack(1)">↦</button></div><div class="seek-row"><time>{{ formatTime(progress) }}</time><input v-model.number="progress" class="seek" type="range" min="0" :max="duration || 1" step="0.1" :style="{'--played': `${duration ? progress / duration * 100 : 0}%`}" @input="seek"><time>{{ formatTime(duration) }}</time></div></div><div class="volume"><button class="lyrics-button" :class="{active: showLyrics}" :disabled="!current" @click="toggleLyrics">Lyrics</button><span>▾</span><input v-model="volume" type="range" min="0" max="100" @input="changeVolume"></div></footer><aside v-if="showLyrics" class="lyrics-panel"><header><div><span class="kicker">Now singing</span><h2>Lyrics</h2></div><button @click="showLyrics = false">×</button></header><div class="lyrics-scroll"><p v-if="lyricsLoading">Finding the words…</p><button v-for="(line,index) in lyrics" v-else :key="index" :class="{active:index === activeLyric, past:index < activeLyric}" @click="seekToLyric(line)">{{ line.text }}</button></div><small>Lyrics by <a href="https://lrclib.net" target="_blank">LRCLIB ↗</a> · open source</small></aside>
 
     <div v-if="showCreate" class="modal" @click.self="showCreate = false"><form @submit.prevent="savePlaylist"><button type="button" class="close" @click="showCreate = false">×</button><span class="kicker">Your library</span><h2>New playlist</h2><p>Start a collection for any moment.</p><label>Name<input v-model="playlistName" maxlength="40" placeholder="Playlist name" autofocus required></label><label class="public-toggle"><input v-model="publicPlaylist" type="checkbox"> Make this playlist public</label><button class="play-cta" type="submit">Create playlist</button></form></div>
   </div>

@@ -37,7 +37,19 @@ button { color: inherit; cursor: pointer; }
 .auth-switch button { border: 0; background: none; color: #118354; font-weight: 700; }
 .auth-note { text-align: center; font-size: 10px; margin-top: 35px !important; }
 .form-error { margin: -5px 0 12px !important; color: #bd3e4e !important; font-size: 12px; }
+.more-wrapper {
+    position: relative;
+}
 
+.more-wrapper > .more {
+    position: relative;
+}
+
+.track-menu {
+    position: absolute;
+    right: 0;
+    z-index: 20;
+}
 /* App shell */
 .music-app { min-height: 100vh; display: grid; grid-template-columns: 230px 1fr; padding-bottom: 88px; background: #0c100e; }
 .sidebar { position: fixed; z-index: 20; inset: 0 auto 88px 0; width: 230px; padding: 30px 18px 18px; display: flex; flex-direction: column; background: #080a09; border-right: 1px solid #1e2421; }
